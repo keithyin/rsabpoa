@@ -58,7 +58,7 @@ fn main() {
         obj_filedir.to_str().unwrap()
     );
     println!("cargo:rustc-link-lib=static=abpoa");
-    println!("cargo:rustc-link-lib=static=z");
-    println!("cargo:rustc-link-lib=static=m");
-    println!("cargo:rustc-link-lib=static=pthread");
+    println!("cargo:rustc-link-lib=m");
+    println!("cargo:rustc-link-lib=z");
+    println!("cargo:rustc-link-lib=pthread");
 }
