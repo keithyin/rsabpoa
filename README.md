@@ -18,7 +18,7 @@ apt-get install build-essential make libz-dev clang
 
 
 ```
-use raabpoa::abpoa::{msa, AbpoaParam};
+use rsabpoa::abpoa::{msa, AbpoaParam};
 
 
 fn main() {
