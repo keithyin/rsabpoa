@@ -6,3 +6,7 @@ license = "MIT"
 repository ="https://github.com/keithyin/rsabpoa"
 
 [dependencies]
+
+
+[build-dependencies]
+bindgen = "0.70.1"
