@@ -1,4 +1,3 @@
-use bindgen;
 use std::{env, path::Path, process::Command};
 
 fn main() {
@@ -35,30 +34,24 @@ fn main() {
 
     Command::new("make")
         .arg("-j8")
+        .arg("libabpoa")
         .current_dir(c_src_file_dir.to_str().unwrap())
         .output()
         .expect("build error");
 
-    let obj_filedir = c_src_file_dir.join("src");
+    let obj_filedir = c_src_file_dir.join("lib");
     let obj_filedir = &obj_filedir;
 
-    Command::new("sh")
-        .arg("-c")
-        .arg("ar rcs libabpoa.a*.o")
-        .current_dir(obj_filedir)
-        .output()
-        .expect("package libabpoa.a error");
-
-    Command::new("sh")
-        .arg("-c")
-        .arg("rm *.o")
-        .current_dir(obj_filedir)
-        .output()
-        .expect("clean error");
+    // Command::new("sh")
+    //     .arg("-c")
+    //     .arg("rm *.o")
+    //     .current_dir(obj_filedir)
+    //     .output()
+    //     .expect("clean error");
 
     println!(
         "cargo:rerun-if-changed={}",
-        current_dir.join("some_dir").to_str().unwrap()
+        current_dir.to_str().unwrap()
     );
     println!(
         "cargo:rustc-link-search=native={}",
@@ -66,4 +59,6 @@ fn main() {
     );
     println!("cargo:rustc-link-lib=static=abpoa");
     println!("cargo:rustc-link-lib=static=z");
+    println!("cargo:rustc-link-lib=static=m");
+    println!("cargo:rustc-link-lib=static=pthread");
 }
