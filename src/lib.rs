@@ -17,7 +17,7 @@ lazy_static! {
     };
 
     pub static ref IDX2NT: Vec<char> = {
-        vec!['A', 'C', 'G', 'T', '-']
+        vec!['A', 'C', 'G', 'T', '-', '-']
     };
 }
 

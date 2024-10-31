@@ -15,5 +15,16 @@ apt-get update
 apt-get install build-essential make libz-dev clang 
 ```
 
-requirements:
-    * requirements: 
+
+
+```
+use raabpoa::abpoa::{msa, AbpoaParam};
+
+
+fn main() {
+    let align_param = AbpoaParam::default();
+    let seqs = vec!["AAC", "AC", "C"];
+    let res = msa(&align_param, &seqs).unwrap();
+    res.print_msa();
+}
+```

@@ -194,12 +194,14 @@ impl AbpoaParam {
             AlignMode::EXTEND => abpoa_para.align_mode = 2,
         }
 
-        if self.out_consensus {
-            abpoa_para.set_out_cons(1);
+        match self.seq_type {
+            SeqType::DNA => abpoa_para.m = 5,
+            SeqType::AminoAcid => abpoa_para.m = 27,
         }
-        if self.out_msa {
-            abpoa_para.set_out_msa(1);
-        }
+
+        abpoa_para.set_out_cons(if self.out_consensus {1} else {0});
+        abpoa_para.set_out_msa(if self.out_msa {1} else {0});
+
 
         abpoa_para.max_n_cons = self.max_n_cons;
         abpoa_para.min_freq = self.min_freq;
@@ -209,16 +211,17 @@ impl AbpoaParam {
 
         abpoa_para.mat = self.mat.as_ptr() as *mut i32;
 
-        println!("{:?}", abpoa_para);
+        // println!("{:?}", abpoa_para);
         unsafe {
             abpoa_post_set_para(&mut abpoa_para as *mut abpoa_para_t);
         }
-        println!("{:?}", abpoa_para);
+        // println!("{:?}", abpoa_para);
 
 
         abpoa_para
     }
 }
+
 
 pub fn msa(param: &AbpoaParam, seqs: &Vec<&str>) -> Option<MsaResult> {
     let n_seqs = seqs.len();
@@ -242,7 +245,7 @@ pub fn msa(param: &AbpoaParam, seqs: &Vec<&str>) -> Option<MsaResult> {
         let ab = abpoa_init();
         abpoa_reset(ab, &mut abpoa_param, seqs[0].len() as c_int);
         let abs = &mut *(*ab).abs;
-        abs.n_seq += n_seqs as i32;
+        abs.n_seq = n_seqs as i32;
 
         let mut abpoa_res: abpoa_res_t = std::mem::zeroed();
 
@@ -252,7 +255,10 @@ pub fn msa(param: &AbpoaParam, seqs: &Vec<&str>) -> Option<MsaResult> {
                 .iter()
                 .map(|base| seq_ele2idx[*base as usize])
                 .collect::<Vec<_>>();
+            // println!("seq-encoded:{:?}", seq_encoded);
             abpoa_res.n_cigar = 0;
+            // println!("before:{:?}", abpoa_res);
+
             abpoa_align_sequence_to_graph(
                 ab,
                 &mut abpoa_param,
@@ -260,6 +266,7 @@ pub fn msa(param: &AbpoaParam, seqs: &Vec<&str>) -> Option<MsaResult> {
                 seq_encoded.len() as c_int,
                 &mut abpoa_res,
             );
+            // println!("after: {:?}", abpoa_res);
             abpoa_add_graph_alignment(
                 ab,
                 &mut abpoa_param,
@@ -277,6 +284,7 @@ pub fn msa(param: &AbpoaParam, seqs: &Vec<&str>) -> Option<MsaResult> {
                 free(abpoa_res.graph_cigar);
             }
         });
+
 
         if abpoa_param.out_msa() == 1 {
             abpoa_generate_rc_msa(ab, &mut abpoa_param);
@@ -355,15 +363,12 @@ pub fn msa(param: &AbpoaParam, seqs: &Vec<&str>) -> Option<MsaResult> {
 
 #[cfg(test)]
 mod test {
-    use super::{msa, AbpoaParam};
+    use crate::abpoa::{msa, AbpoaParam};
 
     #[test]
     fn test_poa_msa() {
-        println!("here");
         let align_param = AbpoaParam::default();
-
         let seqs = vec!["AAC", "AC", "C"];
-
         let res = msa(&align_param, &seqs).unwrap();
         res.print_msa();
     }
