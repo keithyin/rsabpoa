@@ -116,7 +116,7 @@ impl Default for AbpoaParam {
     fn default() -> Self {
         Self {
             match_score: 2,
-            mismatch_score: -4,
+            mismatch_score: 4,
             gap_open1: 4,
             gap_open2: 24,
             gap_ext1: 2,
@@ -209,9 +209,12 @@ impl AbpoaParam {
 
         abpoa_para.mat = self.mat.as_ptr() as *mut i32;
 
+        println!("{:?}", abpoa_para);
         unsafe {
             abpoa_post_set_para(&mut abpoa_para as *mut abpoa_para_t);
         }
+        println!("{:?}", abpoa_para);
+
 
         abpoa_para
     }
@@ -222,14 +225,21 @@ pub fn msa(param: &AbpoaParam, seqs: &Vec<&str>) -> Option<MsaResult> {
     if n_seqs == 0 {
         return None;
     }
+
+    let seq_ele2idx = match param.seq_type {
+        SeqType::DNA => &SEQ_NT4_TABLE,
+        _ => panic!("not implement yet"),
+    };
+
+    let idx2seq_ele = match param.seq_type {
+        SeqType::DNA => &IDX2NT,
+        _ => panic!("not implement yet"),
+    };
+
     let mut abpoa_param = param.to_abpoa_para_t();
-    println!("abpoa_param:{:?}", abpoa_param);
 
     let res = unsafe {
         let ab = abpoa_init();
-        
-
-
         abpoa_reset(ab, &mut abpoa_param, seqs[0].len() as c_int);
         let abs = &mut *(*ab).abs;
         abs.n_seq += n_seqs as i32;
@@ -240,7 +250,7 @@ pub fn msa(param: &AbpoaParam, seqs: &Vec<&str>) -> Option<MsaResult> {
             let mut seq_encoded = seq
                 .as_bytes()
                 .iter()
-                .map(|base| SEQ_NT4_TABLE[*base as usize])
+                .map(|base| seq_ele2idx[*base as usize])
                 .collect::<Vec<_>>();
             abpoa_res.n_cigar = 0;
             abpoa_align_sequence_to_graph(
@@ -320,7 +330,7 @@ pub fn msa(param: &AbpoaParam, seqs: &Vec<&str>) -> Option<MsaResult> {
                 let mut msa_seq1 = String::new();
                 for j in 0..msa_len {
                     let c = *(*abc.msa_base.add(i as usize)).add(j as usize);
-                    msa_seq1.push(IDX2NT[c as usize]);
+                    msa_seq1.push(idx2seq_ele[c as usize]);
                 }
 
                 msa_seq.push(msa_seq1);

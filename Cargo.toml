@@ -6,3 +6,4 @@ license = "MIT"
 repository ="https://github.com/keithyin/rsabpoa"
 
 [dependencies]
+lazy_static = "1.5"
