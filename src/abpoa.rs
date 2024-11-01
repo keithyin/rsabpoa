@@ -65,6 +65,42 @@ impl MsaResult {
         }
     }
 
+    pub fn n_seq(&self) -> i32 {
+        self.n_seq
+    }
+
+    pub fn n_cons(&self) -> i32 {
+        self.n_cons
+    }
+
+    pub fn clu_n_seq(&self) -> &Vec<i32> {
+        &self.clu_n_seq
+    }
+
+    pub fn clu_read_ids(&self) -> &Vec<Vec<i32>> {
+        &self.clu_read_ids
+    }
+
+    pub fn cons_len(&self) -> &Vec<i32> {
+        &self.cons_len
+    }
+
+    pub fn cons_seq(&self) -> &Vec<String> {
+        &self.cons_seq
+    }
+
+    pub fn cons_cov(&self) -> &Vec<Vec<i32>> {
+        &self.cons_cov
+    }
+
+    pub fn msa_len(&self) -> i32 {
+        self.msa_len
+    }
+
+    pub fn msa_seq(&self) -> &Vec<String> {
+        &self.msa_seq
+    }
+
     pub fn print_msa(&self) {
         if self.msa_seq.len() == 0 {
             return;
