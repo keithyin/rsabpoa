@@ -26,6 +26,7 @@ extern "C" {
     pub fn free(ptr: *mut u64);
 }
 
+#[derive(Debug)]
 pub struct MsaResult {
     n_seq: i32,
     n_cons: i32,
@@ -36,7 +37,7 @@ pub struct MsaResult {
     cons_seq: Vec<String>,
     cons_cov: Vec<Vec<i32>>,
     msa_len: i32,
-    msa_seq: Vec<String>,
+    msa_seq: Vec<String>, 
 }
 
 impl MsaResult {
@@ -407,5 +408,13 @@ mod test {
         let seqs = vec!["AAC", "AC", "C"];
         let res = msa(&align_param, &seqs).unwrap();
         res.print_msa();
+        println!("{:?}", res);
+
+
+        let align_param = AbpoaParam::default();
+        let seqs = vec!["AAC", "GGAC", "GC"];
+        let res = msa(&align_param, &seqs).unwrap();
+        res.print_msa();
+        println!("{:?}", res);
     }
 }
