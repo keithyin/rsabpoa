@@ -408,13 +408,17 @@ mod test {
         let seqs = vec!["AAC", "AC", "C"];
         let res = msa(&align_param, &seqs).unwrap();
         res.print_msa();
-        println!("{:?}", res);
-
-
+        assert_eq!(res.msa_seq[0], "AAC");
+        assert_eq!(res.msa_seq[1], "-AC");
+        assert_eq!(res.msa_seq[2], "--C");
+        
         let align_param = AbpoaParam::default();
         let seqs = vec!["AAC", "GGAC", "GC"];
         let res = msa(&align_param, &seqs).unwrap();
         res.print_msa();
-        println!("{:?}", res);
+        // println!("{:?}", res);
+        assert_eq!(res.msa_seq()[0], "-AAC");
+        assert_eq!(res.msa_seq()[1], "GGAC");
+        assert_eq!(res.msa_seq()[2], "G--C");
     }
 }
