@@ -37,7 +37,7 @@ pub struct MsaResult {
     cons_seq: Vec<String>,
     cons_cov: Vec<Vec<i32>>,
     msa_len: i32,
-    msa_seq: Vec<String>, 
+    msa_seq: Vec<String>,
 }
 
 impl MsaResult {
@@ -236,9 +236,8 @@ impl AbpoaParam {
             SeqType::AminoAcid => abpoa_para.m = 27,
         }
 
-        abpoa_para.set_out_cons(if self.out_consensus {1} else {0});
-        abpoa_para.set_out_msa(if self.out_msa {1} else {0});
-
+        abpoa_para.set_out_cons(if self.out_consensus { 1 } else { 0 });
+        abpoa_para.set_out_msa(if self.out_msa { 1 } else { 0 });
 
         abpoa_para.max_n_cons = self.max_n_cons;
         abpoa_para.min_freq = self.min_freq;
@@ -254,11 +253,9 @@ impl AbpoaParam {
         }
         // println!("{:?}", abpoa_para);
 
-
         abpoa_para
     }
 }
-
 
 pub fn msa(param: &AbpoaParam, seqs: &Vec<&str>) -> Option<MsaResult> {
     let n_seqs = seqs.len();
@@ -321,7 +318,6 @@ pub fn msa(param: &AbpoaParam, seqs: &Vec<&str>) -> Option<MsaResult> {
                 free(abpoa_res.graph_cigar);
             }
         });
-
 
         if abpoa_param.out_msa() == 1 {
             abpoa_generate_rc_msa(ab, &mut abpoa_param);
@@ -411,7 +407,7 @@ mod test {
         assert_eq!(res.msa_seq[0], "AAC");
         assert_eq!(res.msa_seq[1], "-AC");
         assert_eq!(res.msa_seq[2], "--C");
-        
+
         let align_param = AbpoaParam::default();
         let seqs = vec!["AAC", "GGAC", "GC"];
         let res = msa(&align_param, &seqs).unwrap();
@@ -420,5 +416,29 @@ mod test {
         assert_eq!(res.msa_seq()[0], "-AAC");
         assert_eq!(res.msa_seq()[1], "GGAC");
         assert_eq!(res.msa_seq()[2], "G--C");
+    }
+
+    #[test]
+    fn test_poa_msa2() {
+        let mut align_param = AbpoaParam::default();
+        align_param.mismatch_score = 6;
+        align_param.gap_open1 = 2;
+        align_param.gap_open2 = 24;
+        align_param.gap_ext1 = 1;
+        align_param.gap_ext2 = 0;
+
+        let seqs = vec![
+            "AAAAAGG",
+            "AAAAAGG",
+            "AAAAAGG",
+            "AAAAAGG",
+            "AAAAAGG",
+            "AAAAAAG",
+            "AAAAAAG",
+            "AAAAAAG",
+            "AAAAAAAAGG",
+        ];
+        let res = msa(&align_param, &seqs).unwrap();
+        res.print_msa();
     }
 }
