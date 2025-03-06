@@ -1,11 +1,12 @@
-use std::{ffi::c_int, marker::PhantomData};
+use std::{ffi::c_int, marker::PhantomData, ops::Deref};
 
 use crate::{
     abpoa_sys::{
         abpoa_add_graph_alignment, abpoa_align_sequence_to_graph, abpoa_free,
-        abpoa_generate_consensus, abpoa_generate_rc_msa, abpoa_init, abpoa_para_t,
-        abpoa_post_set_para, abpoa_res_t, abpoa_reset,
+        abpoa_generate_consensus, abpoa_generate_rc_msa, abpoa_init, abpoa_msa, abpoa_para_t,
+        abpoa_post_set_para, abpoa_res_t, abpoa_reset, abpoa_t,
     },
+    utils::reverse_complement,
     IDX2NT, SEQ_NT4_TABLE,
 };
 
@@ -24,6 +25,34 @@ pub enum SeqType {
 
 extern "C" {
     pub fn free(ptr: *mut u64);
+}
+
+#[derive(Debug)]
+pub struct AbPoaResT {
+    ab_poa_res: abpoa_res_t,
+}
+
+impl Deref for AbPoaResT {
+    type Target = abpoa_res_t;
+    fn deref(&self) -> &Self::Target {
+        &self.ab_poa_res
+    }
+}
+
+impl From<abpoa_res_t> for AbPoaResT {
+    fn from(value: abpoa_res_t) -> Self {
+        Self { ab_poa_res: value }
+    }
+}
+
+impl Drop for AbPoaResT {
+    fn drop(&mut self) {
+        if self.ab_poa_res.n_cigar > 0 {
+            unsafe {
+                free(self.ab_poa_res.graph_cigar);
+            };
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -100,6 +129,14 @@ impl MsaResult {
 
     pub fn msa_seq(&self) -> &Vec<String> {
         &self.msa_seq
+    }
+
+    pub fn first_consensus_seq(&self) -> Option<&str> {
+        if self.msa_seq.len() == self.n_seq as usize {
+            None
+        } else {
+            Some(self.msa_seq[self.n_seq as usize].as_str())
+        }
     }
 
     pub fn print_msa(&self) {
@@ -291,6 +328,8 @@ pub fn msa(param: &AbpoaParam, seqs: &Vec<&str>) -> Option<MsaResult> {
                 .collect::<Vec<_>>();
             // println!("seq-encoded:{:?}", seq_encoded);
             abpoa_res.n_cigar = 0;
+            abpoa_res.n_matched_bases = 0;
+
             // println!("before:{:?}", abpoa_res);
 
             abpoa_align_sequence_to_graph(
@@ -313,6 +352,8 @@ pub fn msa(param: &AbpoaParam, seqs: &Vec<&str>) -> Option<MsaResult> {
                 n_seqs as c_int,
                 1,
             );
+            // println!("{}", abpoa_res.n_cigar);
+            println!("{}", abpoa_res.n_matched_bases);
 
             if abpoa_res.n_cigar > 0 {
                 free(abpoa_res.graph_cigar);
@@ -394,9 +435,194 @@ pub fn msa(param: &AbpoaParam, seqs: &Vec<&str>) -> Option<MsaResult> {
     Some(res)
 }
 
+/// seqs order matters
+///
+pub fn msa_with_adaptive_fwd_rev(param: &AbpoaParam, seqs: &Vec<&str>) -> Option<MsaResult> {
+    let n_seqs = seqs.len();
+    if n_seqs == 0 {
+        return None;
+    }
+
+    let seq_ele2idx = match param.seq_type {
+        SeqType::DNA => &SEQ_NT4_TABLE,
+        _ => panic!("not implement yet"),
+    };
+
+    let idx2seq_ele = match param.seq_type {
+        SeqType::DNA => &IDX2NT,
+        _ => panic!("not implement yet"),
+    };
+
+    let mut abpoa_param = param.to_abpoa_para_t();
+
+    let res = unsafe {
+        let ab = abpoa_init();
+        abpoa_reset(ab, &mut abpoa_param, seqs[0].len() as c_int);
+        let abs = &mut *(*ab).abs;
+        abs.n_seq = n_seqs as i32;
+
+        seqs.iter().enumerate().for_each(|(read_idx, seq)| {
+            let mut fwd_seq_encoded = seq
+                .as_bytes()
+                .iter()
+                .map(|base| seq_ele2idx[*base as usize])
+                .collect::<Vec<_>>();
+
+            let mut rev_seq_encoded = reverse_complement(seq.as_bytes())
+                .iter()
+                .map(|base| seq_ele2idx[*base as usize])
+                .collect::<Vec<_>>();
+
+            let fwd_res = abpoa_align_sequence_to_graph_with_adaptive_fwd_rev(
+                ab,
+                &mut abpoa_param,
+                fwd_seq_encoded.as_mut_ptr(),
+                fwd_seq_encoded.len() as c_int,
+            );
+            let rev_res = abpoa_align_sequence_to_graph_with_adaptive_fwd_rev(
+                ab,
+                &mut abpoa_param,
+                rev_seq_encoded.as_mut_ptr(),
+                rev_seq_encoded.len() as c_int,
+            );
+
+            let (mut final_seq, final_res) = if fwd_res.n_matched_bases > rev_res.n_matched_bases {
+                (fwd_seq_encoded, fwd_res)
+            } else {
+                (rev_seq_encoded, rev_res)
+            };
+
+            abpoa_add_graph_alignment(
+                ab,
+                &mut abpoa_param,
+                final_seq.as_mut_ptr(),
+                std::ptr::null_mut(),
+                final_seq.len() as c_int,
+                std::ptr::null_mut(),
+                final_res.ab_poa_res,
+                read_idx as c_int,
+                n_seqs as c_int,
+                1,
+            );
+        });
+
+        if abpoa_param.out_msa() == 1 {
+            abpoa_generate_rc_msa(ab, &mut abpoa_param);
+        } else if abpoa_param.out_cons() == 1 {
+            abpoa_generate_consensus(ab, &mut abpoa_param);
+        }
+
+        let abc = &mut *(*ab).abc;
+        let (
+            n_cons,
+            mut clu_n_seq,
+            mut clu_read_ids,
+            mut cons_len,
+            mut cons_seq,
+            mut cons_cov,
+            msa_len,
+            mut msa_seq,
+        ) = (
+            abc.n_cons,
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+            abc.msa_len,
+            vec![],
+        );
+        for i in 0..n_cons {
+            clu_n_seq.push(*abc.clu_n_seq.add(i as usize));
+            cons_len.push(*abc.cons_len.add(i as usize));
+
+            let (mut clu_read_ids1, mut cons_seq1, mut cons_cov1) = (vec![], String::new(), vec![]);
+            for j in 0..*abc.clu_n_seq.add(i as usize) {
+                clu_read_ids1.push(*(*abc.clu_read_ids.add(i as usize)).add(j as usize));
+            }
+
+            clu_read_ids.push(clu_read_ids1);
+
+            for j in 0..*abc.cons_len.add(i as usize) {
+                let c = *(*abc.cons_base.add(i as usize)).add(j as usize);
+                cons_seq1.push(c as char);
+                cons_cov1.push(*(*abc.cons_cov.add(i as usize)).add(j as usize));
+            }
+
+            cons_seq.push(cons_seq1);
+            cons_cov.push(cons_cov1);
+        }
+
+        if msa_len > 0 {
+            for i in 0..(abc.n_seq + n_cons) {
+                let mut msa_seq1 = String::new();
+                for j in 0..msa_len {
+                    let c = *(*abc.msa_base.add(i as usize)).add(j as usize);
+                    msa_seq1.push(idx2seq_ele[c as usize]);
+                }
+
+                msa_seq.push(msa_seq1);
+            }
+        }
+        abpoa_free(ab);
+        MsaResult::new(
+            n_seqs as i32,
+            n_cons,
+            clu_n_seq,
+            clu_read_ids,
+            cons_len,
+            cons_seq,
+            cons_cov,
+            msa_len,
+            msa_seq,
+        )
+    };
+
+    Some(res)
+}
+
+unsafe fn abpoa_align_sequence_to_graph_with_adaptive_fwd_rev(
+    ab: *mut abpoa_t,
+    abpt: *mut abpoa_para_t,
+    query: *mut u8,
+    qlen: ::std::os::raw::c_int,
+) -> AbPoaResT {
+    let mut abpoa_res: abpoa_res_t = std::mem::zeroed();
+    abpoa_align_sequence_to_graph(ab, abpt, query, qlen, &mut abpoa_res);
+    abpoa_res.into()
+}
+
+pub fn msa2(abpt: *mut abpoa_para_t, seqs: &mut Vec<&mut [u8]>) {
+    let n_seqs = seqs.len();
+    let mut seq_lens = seqs
+        .iter()
+        .map(|seq| seq.len() as c_int)
+        .collect::<Vec<_>>();
+    let mut seqs = seqs
+        .iter_mut()
+        .map(|seq| seq.as_mut_ptr())
+        .collect::<Vec<_>>();
+    unsafe {
+        let ab = abpoa_init();
+
+        abpoa_msa(
+            ab,
+            abpt,
+            n_seqs as c_int,
+            std::ptr::null_mut(),
+            seq_lens.as_mut_ptr(),
+            seqs.as_mut_ptr(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        );
+    }
+}
+
 #[cfg(test)]
 mod test {
     use crate::abpoa::{msa, AbpoaParam};
+
+    use super::msa_with_adaptive_fwd_rev;
 
     #[test]
     fn test_poa_msa() {
@@ -439,6 +665,79 @@ mod test {
             "AAAAAAAAGG",
         ];
         let res = msa(&align_param, &seqs).unwrap();
+        res.print_msa();
+    }
+
+    #[test]
+    fn test_poa_consensus() {
+        let mut align_param = AbpoaParam::default();
+        align_param.mismatch_score = 6;
+        align_param.gap_open1 = 2;
+        align_param.gap_open2 = 24;
+        align_param.gap_ext1 = 1;
+        align_param.gap_ext2 = 0;
+        align_param.out_consensus = true;
+
+        let seqs = vec![
+            "AAGAAAAAG",
+            "AATGAAAAAG",
+            "AAGAAAAAG",
+            "AAGAAAAG",
+            "TAGAAAAAAAAAAAAG",
+            "AGAAAAG",
+            "AAAGAAAAG",
+        ];
+        let res = msa(&align_param, &seqs).unwrap();
+        res.print_msa();
+    }
+
+    #[test]
+    fn test_poa_consensus2() {
+        let mut align_param = AbpoaParam::default();
+        align_param.match_score = 2;
+        align_param.mismatch_score = 5;
+        align_param.gap_open1 = 2;
+        align_param.gap_open2 = 24;
+        align_param.gap_ext1 = 1;
+        align_param.gap_ext2 = 0;
+        align_param.out_consensus = true;
+
+        let seqs = vec![
+            "AAGAAAAAG",
+            "AATGAAAAAG",
+            "AAGAAAAAG",
+            "AAGAAAAG",
+            "TAGAAAAAAAAAAAAG",
+            "CTTTTTTTTTTTTCTA",
+            "AGAAAAG",
+            "AAAGAAAAG",
+        ];
+        let res = msa(&align_param, &seqs).unwrap();
+        res.print_msa();
+    }
+
+    #[test]
+    fn test_poa_consensus_adaptive() {
+        let mut align_param = AbpoaParam::default();
+        align_param.match_score = 2;
+        align_param.mismatch_score = 5;
+        align_param.gap_open1 = 2;
+        align_param.gap_open2 = 24;
+        align_param.gap_ext1 = 1;
+        align_param.gap_ext2 = 0;
+        align_param.out_consensus = true;
+
+        let seqs = vec![
+            "AAGAAAAAG",
+            "AATGAAAAAG",
+            "AAGAAAAAG",
+            "AAGAAAAG",
+            "TAGAAAAAAAAAAAAG",
+            "CTTTTTTTTTTTTCTA",
+            "AGAAAAG",
+            "AAAGAAAAG",
+        ];
+        let res = msa_with_adaptive_fwd_rev(&align_param, &seqs).unwrap();
         res.print_msa();
     }
 }

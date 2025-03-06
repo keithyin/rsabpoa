@@ -1,6 +1,9 @@
 pub mod abpoa_sys;
 pub mod abpoa;
+pub mod utils;
 use lazy_static::lazy_static;
+
+
 
 lazy_static! {
     pub static ref SEQ_NT4_TABLE: Vec<u8> = {
