@@ -2,7 +2,7 @@ pub mod abpoa_sys;
 pub mod abpoa;
 pub mod utils;
 pub mod abpoa_result_parser;
-
+pub mod wrapper;
 use lazy_static::lazy_static;
 
 
