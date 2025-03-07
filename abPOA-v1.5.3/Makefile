@@ -23,6 +23,7 @@ else ifneq ($(gdb),)
     OPT_FLAGS = -g
 else
     OPT_FLAGS = -O3
+endif
 
 CFLAGS        = $(OPT_FLAGS) $(EXTRA_FLAGS)
 
