@@ -13,10 +13,7 @@ use gskits::{
     utils::ScopedTimer,
 };
 use num_cpus;
-use rsabpoa::{
-    abpoa::{abpoa_consensus_dna, abpoa_consensus_dna_core, msa_with_adaptive_fwd_rev, AbpoaParam},
-    abpoa_sys::{abpoa_free, abpoa_free_para, abpoa_init, abpoa_para_t, abpoa_t},
-};
+use rsabpoa::{abpoa::abpoa_consensus_dna, abpoa_sys::abpoa_para_t, wrapper::AbpoaParam};
 use rust_htslib::bam::{self, header::HeaderRecord, Header, Read, Reader, Record, Records, Writer};
 
 #[derive(Debug, Parser, Clone)]
@@ -206,7 +203,6 @@ fn bam_reader_worker(
 }
 
 fn consensus_worker(
-    abpoa_param: &AbpoaParam,
     recv: Receiver<ChannelSubreads>,
     send: Sender<ConsensusResult>,
     cli: &Cli,
@@ -214,8 +210,9 @@ fn consensus_worker(
 ) {
     let mut scoped_timer = ScopedTimer::new();
     let mut instant = Instant::now();
-    let mut abpt = abpoa_param.to_abpoa_para_t();
-    let abpt: *mut abpoa_para_t = &mut abpt as *mut abpoa_para_t;
+    let mut abpt = AbpoaParam::new();
+    abpt.modify_as_channel_consensus_param();
+    abpt.post_set();
 
     // let ab = unsafe { abpoa_init() };
     for channel_subreads in recv {
@@ -228,7 +225,7 @@ fn consensus_worker(
         }
         let mut _timer = scoped_timer.perform_timing();
 
-        let cns_res = consensus_core(None, abpt, cli, channel_subreads);
+        let cns_res = consensus_core(abpt.ptr(), cli, channel_subreads);
         _timer.done_with_cnt(1);
         if let Some(consensus_res) = cns_res {
             match send.send(consensus_res) {
@@ -243,7 +240,6 @@ fn consensus_worker(
 }
 
 fn consensus_core(
-    ab: Option<*mut abpoa_t>,
     abpt: *mut abpoa_para_t,
     cli: &Cli,
     mut channel_subreads: ChannelSubreads,
@@ -256,19 +252,8 @@ fn consensus_core(
             .iter_mut()
             .map(|sbr| unsafe { sbr.seq.as_bytes_mut() })
             .collect::<Vec<_>>();
-        let clean_up_ab = ab.is_none();
-        let ab = if let Some(ab_) = ab {
-            ab_
-        } else {
-            unsafe { abpoa_init() }
-        };
 
-        let msa_result = abpoa_consensus_dna_core(ab, abpt, &mut seqs);
-        if clean_up_ab {
-            unsafe {
-                abpoa_free(ab);
-            }
-        }
+        let msa_result = abpoa_consensus_dna(abpt, &mut seqs);
 
         if msa_result.is_none() {
             return None;
@@ -402,13 +387,15 @@ fn single_thread(cli: &Cli, oup_bam: &str) {
 
     let channel_sbr_iter = ChannelSbrIter::new(reader.records(), cli.first_n_channels);
 
-    let param = AbpoaParam::channel_draft_param();
-    let mut abpt = param.to_abpoa_para_t();
+    let mut abpt = AbpoaParam::new();
+    abpt.modify_as_channel_consensus_param();
+    abpt.post_set();
+
     let pbar = get_spin_pb("processing...".to_string(), DEFAULT_INTERVAL);
     // let ab = unsafe { abpoa_init() };
 
     for channel_sbr in channel_sbr_iter {
-        if let Some(v) = consensus_core(None, &mut abpt, cli, channel_sbr) {
+        if let Some(v) = consensus_core(abpt.ptr(), cli, channel_sbr) {
             let _ = consensus_writer_core(&mut writer, v);
         }
         pbar.inc(1);
@@ -438,23 +425,7 @@ fn multi_threads(cli: &Cli, oup_bam: &str) {
             let reader_recv_ = reader_recv.clone();
             let consensus_result_sender_ = consensus_result_sender.clone();
             thread_scope.spawn(move || {
-                let mut align_param = AbpoaParam::default();
-                align_param.match_score = 2;
-                align_param.mismatch_score = 5;
-                align_param.gap_open1 = 2;
-                align_param.gap_open2 = 24;
-                align_param.gap_ext1 = 1;
-                align_param.gap_ext2 = 0;
-                align_param.out_msa = false;
-                align_param.out_consensus = true;
-                align_param.set_align_mode(rsabpoa::abpoa::AlignMode::LOCAL);
-                consensus_worker(
-                    &align_param,
-                    reader_recv_,
-                    consensus_result_sender_,
-                    cli,
-                    thread_idx,
-                );
+                consensus_worker(reader_recv_, consensus_result_sender_, cli, thread_idx);
             });
         }
         drop(reader_recv);
