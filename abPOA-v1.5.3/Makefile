@@ -17,11 +17,12 @@ ifneq ($(sdebug),)
 endif
 
 # for gdb
-ifneq ($(gdb),)
-	OPT_FLAGS = -g
+ifneq ($(release),)
+    OPT_FLAGS = -O3 -g
+else ifneq ($(gdb),)
+    OPT_FLAGS = -g
 else
-	OPT_FLAGS = -O3
-endif
+    OPT_FLAGS = -O3
 
 CFLAGS        = $(OPT_FLAGS) $(EXTRA_FLAGS)
 

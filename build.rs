@@ -33,6 +33,7 @@ fn main() {
     // let build_out_path = Path::new(&env::var("OUT_DIR").unwrap());
 
     Command::new("make")
+        .arg("release=1")
         .arg("-j8")
         .arg("libabpoa")
         .current_dir(c_src_file_dir.to_str().unwrap())

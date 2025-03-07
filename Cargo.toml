@@ -13,3 +13,6 @@ gskits="0.13.0"
 crossbeam = "0.8"
 clap = {version="4.4", features=["derive"]}
 num_cpus="1.16"
+
+[profile.release]
+debug = true

@@ -1,14 +1,17 @@
 use std::{ffi::c_int, marker::PhantomData, ops::Deref};
 
 use crate::{
+    abpoa_result_parser::abpoa_result_parser,
     abpoa_sys::{
-        abpoa_add_graph_alignment, abpoa_align_sequence_to_graph, abpoa_free,
-        abpoa_generate_consensus, abpoa_generate_rc_msa, abpoa_init, abpoa_msa, abpoa_para_t,
-        abpoa_post_set_para, abpoa_res_t, abpoa_reset, abpoa_t,
+        abpoa_add_graph_alignment, abpoa_align_sequence_to_graph, abpoa_cons_t, abpoa_free,
+        abpoa_generate_consensus, abpoa_generate_rc_msa, abpoa_init, abpoa_msa, abpoa_msa1,
+        abpoa_para_t, abpoa_post_set_para, abpoa_res_t, abpoa_reset, abpoa_t,
     },
     utils::reverse_complement,
     IDX2NT, SEQ_NT4_TABLE,
 };
+
+use crate::abpoa_result_parser::MsaResult;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AlignMode {
@@ -52,111 +55,6 @@ impl Drop for AbPoaResT {
                 free(self.ab_poa_res.graph_cigar);
             };
         }
-    }
-}
-
-#[derive(Debug)]
-pub struct MsaResult {
-    n_seq: i32,
-    n_cons: i32,
-
-    clu_n_seq: Vec<i32>,
-    clu_read_ids: Vec<Vec<i32>>,
-    cons_len: Vec<i32>,
-    cons_seq: Vec<String>,
-    cons_cov: Vec<Vec<i32>>,
-    msa_len: i32,
-    msa_seq: Vec<String>,
-}
-
-impl MsaResult {
-    /// n_seqs, n_cons, clu_n_seq, clu_read_ids, cons_len, cons_seq, cons_cov, msa_len, msa_seq
-    pub fn new(
-        n_seq: i32,
-        n_cons: i32,
-        clu_n_seq: Vec<i32>,
-        clu_read_ids: Vec<Vec<i32>>,
-        cons_len: Vec<i32>,
-        cons_seq: Vec<String>,
-        cons_cov: Vec<Vec<i32>>,
-        msa_len: i32,
-        msa_seq: Vec<String>,
-    ) -> Self {
-        Self {
-            n_seq,
-            n_cons,
-            clu_n_seq,
-            clu_read_ids,
-            cons_len,
-            cons_seq,
-            cons_cov,
-            msa_len,
-            msa_seq,
-        }
-    }
-
-    pub fn n_seq(&self) -> i32 {
-        self.n_seq
-    }
-
-    pub fn n_cons(&self) -> i32 {
-        self.n_cons
-    }
-
-    pub fn clu_n_seq(&self) -> &Vec<i32> {
-        &self.clu_n_seq
-    }
-
-    pub fn clu_read_ids(&self) -> &Vec<Vec<i32>> {
-        &self.clu_read_ids
-    }
-
-    pub fn cons_len(&self) -> &Vec<i32> {
-        &self.cons_len
-    }
-
-    pub fn cons_seq(&self) -> &Vec<String> {
-        &self.cons_seq
-    }
-
-    pub fn cons_cov(&self) -> &Vec<Vec<i32>> {
-        &self.cons_cov
-    }
-
-    pub fn msa_len(&self) -> i32 {
-        self.msa_len
-    }
-
-    pub fn msa_seq(&self) -> &Vec<String> {
-        &self.msa_seq
-    }
-
-    pub fn first_consensus_seq(&self) -> Option<&str> {
-        if self.msa_seq.len() == self.n_seq as usize {
-            None
-        } else {
-            Some(self.msa_seq[self.n_seq as usize].as_str())
-        }
-    }
-
-    pub fn print_msa(&self) {
-        if self.msa_seq.len() == 0 {
-            return;
-        }
-
-        self.msa_seq.iter().enumerate().for_each(|(idx, seq)| {
-            if idx < self.n_seq as usize {
-                print!("seq_{}  ", idx + 1);
-            } else {
-                let cons_id = if self.n_cons > 1 {
-                    format!("_{}", idx - self.n_seq as usize + 1)
-                } else {
-                    "".to_string()
-                };
-                print!("consensus{}", cons_id);
-            }
-            println!("{}", seq);
-        });
     }
 }
 
@@ -213,6 +111,20 @@ impl Default for AbpoaParam {
 }
 
 impl AbpoaParam {
+    pub fn channel_draft_param() -> Self {
+        let mut align_param = Self::default();
+        align_param.match_score = 2;
+        align_param.mismatch_score = 5;
+        align_param.gap_open1 = 2;
+        align_param.gap_open2 = 24;
+        align_param.gap_ext1 = 1;
+        align_param.gap_ext2 = 0;
+        align_param.out_msa = false;
+        align_param.out_consensus = true;
+        align_param.set_align_mode(AlignMode::LOCAL);
+        align_param
+    }
+
     pub fn set_align_mode(&mut self, align_mode: AlignMode) -> &mut Self {
         self.align_mode = align_mode;
         self
@@ -235,7 +147,8 @@ impl AbpoaParam {
         self
     }
 
-    fn to_abpoa_para_t(&self) -> abpoa_para_t {
+    // don't call abpoa_free_para, the mat is owned by rust!!!
+    pub fn to_abpoa_para_t(&self) -> abpoa_para_t {
         let mut abpoa_para: abpoa_para_t = unsafe { std::mem::zeroed() };
 
         abpoa_para.match_ = self.match_score;
@@ -255,6 +168,7 @@ impl AbpoaParam {
         abpoa_para.set_progressive_poa(0);
         abpoa_para.set_ret_cigar(1);
         abpoa_para.set_use_qv(0);
+        abpoa_para.set_amb_strand(1);
 
         match self.cons_algrm.to_uppercase().as_str() {
             "MF" => abpoa_para.cons_algrm = 1,
@@ -366,73 +280,13 @@ pub fn msa(param: &AbpoaParam, seqs: &Vec<&str>) -> Option<MsaResult> {
             abpoa_generate_consensus(ab, &mut abpoa_param);
         }
 
-        let abc = &mut *(*ab).abc;
-        let (
-            n_cons,
-            mut clu_n_seq,
-            mut clu_read_ids,
-            mut cons_len,
-            mut cons_seq,
-            mut cons_cov,
-            msa_len,
-            mut msa_seq,
-        ) = (
-            abc.n_cons,
-            vec![],
-            vec![],
-            vec![],
-            vec![],
-            vec![],
-            abc.msa_len,
-            vec![],
-        );
-        for i in 0..n_cons {
-            clu_n_seq.push(*abc.clu_n_seq.add(i as usize));
-            cons_len.push(*abc.cons_len.add(i as usize));
-
-            let (mut clu_read_ids1, mut cons_seq1, mut cons_cov1) = (vec![], String::new(), vec![]);
-            for j in 0..*abc.clu_n_seq.add(i as usize) {
-                clu_read_ids1.push(*(*abc.clu_read_ids.add(i as usize)).add(j as usize));
-            }
-
-            clu_read_ids.push(clu_read_ids1);
-
-            for j in 0..*abc.cons_len.add(i as usize) {
-                let c = *(*abc.cons_base.add(i as usize)).add(j as usize);
-                cons_seq1.push(c as char);
-                cons_cov1.push(*(*abc.cons_cov.add(i as usize)).add(j as usize));
-            }
-
-            cons_seq.push(cons_seq1);
-            cons_cov.push(cons_cov1);
-        }
-
-        if msa_len > 0 {
-            for i in 0..(abc.n_seq + n_cons) {
-                let mut msa_seq1 = String::new();
-                for j in 0..msa_len {
-                    let c = *(*abc.msa_base.add(i as usize)).add(j as usize);
-                    msa_seq1.push(idx2seq_ele[c as usize]);
-                }
-
-                msa_seq.push(msa_seq1);
-            }
-        }
+        let abc: &mut abpoa_cons_t = &mut *(*ab).abc;
+        let res = abpoa_result_parser(abc, idx2seq_ele, &abpoa_param);
         abpoa_free(ab);
-        MsaResult::new(
-            n_seqs as i32,
-            n_cons,
-            clu_n_seq,
-            clu_read_ids,
-            cons_len,
-            cons_seq,
-            cons_cov,
-            msa_len,
-            msa_seq,
-        )
+        res
     };
 
-    Some(res)
+    res
 }
 
 /// seqs order matters
@@ -513,72 +367,12 @@ pub fn msa_with_adaptive_fwd_rev(param: &AbpoaParam, seqs: &Vec<&str>) -> Option
         }
 
         let abc = &mut *(*ab).abc;
-        let (
-            n_cons,
-            mut clu_n_seq,
-            mut clu_read_ids,
-            mut cons_len,
-            mut cons_seq,
-            mut cons_cov,
-            msa_len,
-            mut msa_seq,
-        ) = (
-            abc.n_cons,
-            vec![],
-            vec![],
-            vec![],
-            vec![],
-            vec![],
-            abc.msa_len,
-            vec![],
-        );
-        for i in 0..n_cons {
-            clu_n_seq.push(*abc.clu_n_seq.add(i as usize));
-            cons_len.push(*abc.cons_len.add(i as usize));
-
-            let (mut clu_read_ids1, mut cons_seq1, mut cons_cov1) = (vec![], String::new(), vec![]);
-            for j in 0..*abc.clu_n_seq.add(i as usize) {
-                clu_read_ids1.push(*(*abc.clu_read_ids.add(i as usize)).add(j as usize));
-            }
-
-            clu_read_ids.push(clu_read_ids1);
-
-            for j in 0..*abc.cons_len.add(i as usize) {
-                let c = *(*abc.cons_base.add(i as usize)).add(j as usize);
-                cons_seq1.push(c as char);
-                cons_cov1.push(*(*abc.cons_cov.add(i as usize)).add(j as usize));
-            }
-
-            cons_seq.push(cons_seq1);
-            cons_cov.push(cons_cov1);
-        }
-
-        if msa_len > 0 {
-            for i in 0..(abc.n_seq + n_cons) {
-                let mut msa_seq1 = String::new();
-                for j in 0..msa_len {
-                    let c = *(*abc.msa_base.add(i as usize)).add(j as usize);
-                    msa_seq1.push(idx2seq_ele[c as usize]);
-                }
-
-                msa_seq.push(msa_seq1);
-            }
-        }
+        let res = abpoa_result_parser(abc, idx2seq_ele, &abpoa_param);
         abpoa_free(ab);
-        MsaResult::new(
-            n_seqs as i32,
-            n_cons,
-            clu_n_seq,
-            clu_read_ids,
-            cons_len,
-            cons_seq,
-            cons_cov,
-            msa_len,
-            msa_seq,
-        )
+        res
     };
 
-    Some(res)
+    res
 }
 
 unsafe fn abpoa_align_sequence_to_graph_with_adaptive_fwd_rev(
@@ -592,7 +386,16 @@ unsafe fn abpoa_align_sequence_to_graph_with_adaptive_fwd_rev(
     abpoa_res.into()
 }
 
-pub fn msa2(abpt: *mut abpoa_para_t, seqs: &mut Vec<&mut [u8]>) {
+pub fn abpoa_consensus_dna_core(
+    ab: *mut abpoa_t,
+    abpt: *mut abpoa_para_t,
+    seqs: &mut Vec<&mut [u8]>,
+) -> Option<MsaResult> {
+    if seqs.len() == 0 {
+        return None;
+    }
+    let seq_ele2idx = &SEQ_NT4_TABLE;
+
     let n_seqs = seqs.len();
     let mut seq_lens = seqs
         .iter()
@@ -600,11 +403,18 @@ pub fn msa2(abpt: *mut abpoa_para_t, seqs: &mut Vec<&mut [u8]>) {
         .collect::<Vec<_>>();
     let mut seqs = seqs
         .iter_mut()
-        .map(|seq| seq.as_mut_ptr())
+        .map(|seq| {
+            seq.iter()
+                .map(|&base| seq_ele2idx[base as usize])
+                .collect::<Vec<_>>()
+        })
         .collect::<Vec<_>>();
-    unsafe {
-        let ab = abpoa_init();
+    let mut seqs = seqs
+        .iter_mut()
+        .map(|seq_encoded| seq_encoded.as_mut_ptr())
+        .collect::<Vec<_>>();
 
+    unsafe {
         abpoa_msa(
             ab,
             abpt,
@@ -615,14 +425,137 @@ pub fn msa2(abpt: *mut abpoa_para_t, seqs: &mut Vec<&mut [u8]>) {
             std::ptr::null_mut(),
             std::ptr::null_mut(),
         );
+        let abc = &*(*ab).abc;
+
+        let res = abpoa_result_parser(abc, &IDX2NT, &(*abpt));
+
+        return res;
+    }
+}
+
+pub fn abpoa_consensus_dna(param: &AbpoaParam, seqs: &mut Vec<&mut [u8]>) -> Option<MsaResult> {
+    if seqs.len() == 0 {
+        return None;
+    }
+    let seq_ele2idx = &SEQ_NT4_TABLE;
+
+    let idx2seq_ele = &IDX2NT;
+
+    let n_seqs = seqs.len();
+    let mut seq_lens = seqs
+        .iter()
+        .map(|seq| seq.len() as c_int)
+        .collect::<Vec<_>>();
+    let mut seqs = seqs
+        .iter_mut()
+        .map(|seq| {
+            seq.iter()
+                .map(|&base| seq_ele2idx[base as usize])
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    let mut seqs = seqs
+        .iter_mut()
+        .map(|seq_encoded| seq_encoded.as_mut_ptr())
+        .collect::<Vec<_>>();
+
+    unsafe {
+        let mut abpt = param.to_abpoa_para_t();
+
+        let ab = abpoa_init();
+        abpoa_msa(
+            ab,
+            &mut abpt,
+            n_seqs as c_int,
+            std::ptr::null_mut(),
+            seq_lens.as_mut_ptr(),
+            seqs.as_mut_ptr(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        );
+        let abc = &mut *(*ab).abc;
+        let result = abpoa_result_parser(abc, idx2seq_ele, &abpt);
+        abpoa_free(ab);
+        return result;
+    }
+}
+
+pub fn parse_consensus_seq_from_abpoa_cons_t_dna(abc: &abpoa_cons_t) -> Option<String> {
+    let n_cons = abc.n_cons;
+    if n_cons <= 0 {
+        return None;
+    }
+    let mut cons_seq = String::new();
+    let idx2seq_ele = &IDX2NT;
+
+    unsafe {
+        let max_cluster_idx = (0..n_cons)
+            .into_iter()
+            .map(|i| i as usize)
+            .map(|i| (i, *abc.clu_n_seq.add(i)))
+            .max_by_key(|v| v.1)
+            .unwrap()
+            .0;
+
+        for j in 0..*abc.cons_len.add(max_cluster_idx) {
+            let c = *(*abc.cons_base.add(max_cluster_idx)).add(j as usize);
+            cons_seq.push(idx2seq_ele[c as usize]);
+        }
+
+        return Some(cons_seq);
     }
 }
 
 #[cfg(test)]
 mod test {
-    use crate::abpoa::{msa, AbpoaParam};
+    use crate::{
+        abpoa::{abpoa_consensus_dna_core, msa, AbpoaParam},
+        abpoa_sys::{abpoa_free, abpoa_init},
+    };
 
-    use super::msa_with_adaptive_fwd_rev;
+    use super::{abpoa_consensus_dna, msa_with_adaptive_fwd_rev};
+
+    fn get_seqs1() -> Vec<String> {
+        let seqs = vec![
+            "AAGAAAAAG",
+            "AATGAAAAAG",
+            "AAGAAAAAG",
+            "AAGAAAAG",
+            "TAGAAAAAAAAAAAAG",
+            "CTTTTTTTTTTTTCTA",
+            "AGAAAAG",
+            "AAAGAAAAG",
+        ];
+        seqs.into_iter().map(|v| v.to_string()).collect::<Vec<_>>()
+    }
+
+    fn get_seqs2() -> Vec<String> {
+        let seqs = vec![
+            "AAGAAAAAG",
+            "AATGAAAAAG",
+            "AAGAAAAAG",
+            "AAGAAAAG",
+            "TAGAAAAAAAAAAAAG",
+            "CTTTTTTTTTTTTCTA",
+            "AGAAAAG",
+            "AAAGAAAAG",
+            "CTTTTTTTT",
+        ];
+        seqs.into_iter().map(|v| v.to_string()).collect::<Vec<_>>()
+    }
+
+    fn get_seqs3() -> Vec<String> {
+        let seqs = vec![
+            "AAGAAAAAG",
+            "AATGAAAAAG",
+            "AAGAAAAAG",
+            "AAGAAAAG",
+            "TAGAAAAAAAAAAAAG",
+            "CTTTTTTTTTTTTCTA",
+            "AGAAAAG",
+        ];
+        seqs.into_iter().map(|v| v.to_string()).collect::<Vec<_>>()
+    }
 
     #[test]
     fn test_poa_msa() {
@@ -739,5 +672,68 @@ mod test {
         ];
         let res = msa_with_adaptive_fwd_rev(&align_param, &seqs).unwrap();
         res.print_msa();
+    }
+
+    #[test]
+    fn test_poa_consensus_a() {
+        let mut align_param = AbpoaParam::default();
+        align_param.match_score = 2;
+        align_param.mismatch_score = 5;
+        align_param.gap_open1 = 2;
+        align_param.gap_open2 = 24;
+        align_param.gap_ext1 = 1;
+        align_param.gap_ext2 = 0;
+        align_param.out_consensus = true;
+
+        let mut seqs = get_seqs1();
+        let mut seqs = seqs
+            .iter_mut()
+            .map(|v| unsafe { v.as_bytes_mut() })
+            .collect::<Vec<_>>();
+        let res = abpoa_consensus_dna(&align_param, &mut seqs).unwrap();
+        res.print_msa();
+        println!("{:?}", res.cons_seq());
+    }
+
+    #[test]
+    fn test_poa_consensus_b() {
+        let mut align_param = AbpoaParam::default();
+        align_param.match_score = 2;
+        align_param.mismatch_score = 5;
+        align_param.gap_open1 = 2;
+        align_param.gap_open2 = 24;
+        align_param.gap_ext1 = 1;
+        align_param.gap_ext2 = 0;
+        align_param.out_consensus = true;
+
+        let mut seqs = get_seqs1();
+        let mut seqs = seqs
+            .iter_mut()
+            .map(|v| unsafe { v.as_bytes_mut() })
+            .collect::<Vec<_>>();
+        let ab = unsafe { abpoa_init() };
+        let mut abpt = align_param.to_abpoa_para_t();
+        let res = abpoa_consensus_dna_core(ab, &mut abpt, &mut seqs).unwrap();
+        res.print_msa();
+        println!("{:?}", res.cons_seq());
+
+        let mut seqs = get_seqs2();
+        let mut seqs = seqs
+            .iter_mut()
+            .map(|v| unsafe { v.as_bytes_mut() })
+            .collect::<Vec<_>>();
+        let res = abpoa_consensus_dna_core(ab, &mut abpt, &mut seqs).unwrap();
+        res.print_msa();
+        println!("{:?}", res.cons_seq());
+
+        let mut seqs = get_seqs3();
+        let mut seqs = seqs
+            .iter_mut()
+            .map(|v| unsafe { v.as_bytes_mut() })
+            .collect::<Vec<_>>();
+        let res = abpoa_consensus_dna_core(ab, &mut abpt, &mut seqs).unwrap();
+        res.print_msa();
+        unsafe { abpoa_free(ab) };
+        println!("{:?}", res.cons_seq());
     }
 }

@@ -712,32 +712,87 @@ void abpoa_reset(abpoa_t *ab, abpoa_para_t *abpt, int qlen) {
     // fprintf(stderr, "qlen: %d, node_n: %d, node_m: %d\n", qlen, abg->node_n, abg->node_m);
     // reset abs
     ab->abs->n_seq = 0;
-    // reset cons
+    // reset cons, set to null after free
     abpoa_cons_t *abc = ab->abc;
     if (abc->n_cons > 0) {
-        if (abc->clu_n_seq != NULL) free(abc->clu_n_seq);
-        if (abc->cons_len != NULL) free(abc->cons_len);
+        if (abc->clu_n_seq != NULL) {
+            free(abc->clu_n_seq);
+            abc->clu_n_seq = NULL;
+        };
+        if (abc->cons_len != NULL) {
+            free(abc->cons_len);
+            abc->cons_len = NULL;
+        };
         if (abc->cons_node_ids != NULL) {
-            for (i = 0; i < abc->n_cons; ++i) free(abc->cons_node_ids[i]); free(abc->cons_node_ids);
+            for (i = 0; i < abc->n_cons; ++i) {
+                free(abc->cons_node_ids[i]);
+                abc->cons_node_ids[i] = NULL;
+            }
+            free(abc->cons_node_ids);
+            abc->cons_node_ids = NULL;
         }
+
         if (abc->cons_base != NULL) {
-            for (i = 0; i < abc->n_cons; ++i) free(abc->cons_base[i]); free(abc->cons_base);
+            for (i = 0; i < abc->n_cons; ++i) {
+                free(abc->cons_base[i]);
+                abc->cons_base[i] = NULL;  // 避免悬空指针
+            }
+            free(abc->cons_base);
+            abc->cons_base = NULL;  // 避免悬空指针
         }
+        
         if (abc->cons_cov != NULL) {
-            for (i = 0; i < abc->n_cons; ++i) free(abc->cons_cov[i]); free(abc->cons_cov);
+            for (i = 0; i < abc->n_cons; ++i) {
+                free(abc->cons_cov[i]);
+                abc->cons_cov[i] = NULL;
+            }
+            free(abc->cons_cov);
+            abc->cons_cov = NULL;
         }
+        
         if (abc->clu_read_ids != NULL) {
-            for (i = 0; i < abc->n_cons; ++i) free(abc->clu_read_ids[i]); free(abc->clu_read_ids);
+            for (i = 0; i < abc->n_cons; ++i) {
+                free(abc->clu_read_ids[i]);
+                abc->clu_read_ids[i] = NULL;
+            }
+            free(abc->clu_read_ids);
+            abc->clu_read_ids = NULL;
         }
+        
         if (abc->cons_phred_score != NULL) {
-            for (i = 0; i < abc->n_cons; ++i) free(abc->cons_phred_score[i]); free(abc->cons_phred_score);
+            for (i = 0; i < abc->n_cons; ++i) {
+                free(abc->cons_phred_score[i]);
+                abc->cons_phred_score[i] = NULL;
+            }
+            free(abc->cons_phred_score);
+            abc->cons_phred_score = NULL;
         }
+        
+        // if (abc->cons_base != NULL) {
+        //     for (i = 0; i < abc->n_cons; ++i) free(abc->cons_base[i]); free(abc->cons_base);
+        // }
+        // if (abc->cons_cov != NULL) {
+        //     for (i = 0; i < abc->n_cons; ++i) free(abc->cons_cov[i]); free(abc->cons_cov);
+        // }
+        // if (abc->clu_read_ids != NULL) {
+        //     for (i = 0; i < abc->n_cons; ++i) free(abc->clu_read_ids[i]); free(abc->clu_read_ids);
+        // }
+        // if (abc->cons_phred_score != NULL) {
+        //     for (i = 0; i < abc->n_cons; ++i) free(abc->cons_phred_score[i]); free(abc->cons_phred_score);
+        // }
     }
+
     if (abc->msa_len > 0) {
         if (abc->msa_base != NULL) {
             for (i = 0; i < abc->n_seq+abc->n_cons; ++i) free(abc->msa_base[i]);
             free(abc->msa_base);
         }
     }
+    // if (abc->msa_len > 0) {
+    //     if (abc->msa_base != NULL) {
+    //         for (i = 0; i < abc->n_seq+abc->n_cons; ++i) free(abc->msa_base[i]);
+    //         free(abc->msa_base);
+    //     }
+    // }
     abc->n_seq = abc->n_cons = abc->msa_len = 0;
 }
