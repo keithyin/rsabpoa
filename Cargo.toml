@@ -1,6 +1,6 @@
 [package]
 name = "rsabpoa"
-version = "0.3.3"
+version = "0.3.4"
 edition = "2021"
 description = "abpoa rust binding"
 license = "MIT"

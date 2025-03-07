@@ -546,7 +546,7 @@ mod test {
 
     fn get_seqs3() -> Vec<String> {
         let seqs = vec![
-            "AAGAAAAAG",
+            "AAGAAAACG",
             "AATGAAAAAG",
             "AAGAAAAAG",
             "AAGAAAAG",
@@ -661,7 +661,7 @@ mod test {
         align_param.out_consensus = true;
 
         let seqs = vec![
-            "AAGAAAAAG",
+            "AAGAAAACG",
             "AATGAAAAAG",
             "AAGAAAAAG",
             "AAGAAAAG",
@@ -733,6 +733,7 @@ mod test {
             .collect::<Vec<_>>();
         let res = abpoa_consensus_dna_core(ab, &mut abpt, &mut seqs).unwrap();
         res.print_msa();
+        println!("{:?}", res.cons_cov());
         unsafe { abpoa_free(ab) };
         println!("{:?}", res.cons_seq());
     }

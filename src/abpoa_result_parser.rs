@@ -9,7 +9,7 @@ pub struct MsaResult {
     pub clu_read_ids: Vec<Vec<i32>>, // read_ids in n-cluster
     pub cons_len: Vec<i32>,
     pub cons_seq: Vec<String>,
-    pub cons_cov: Vec<Vec<i32>>,
+    pub cons_cov: Vec<Vec<i32>>,     // subreads base support
     pub msa_len: i32,
     pub msa_seq: Vec<String>,
 }
@@ -112,16 +112,10 @@ impl MsaResult {
 
         self.msa_seq.iter().enumerate().for_each(|(idx, seq)| {
             if idx < self.n_seq as usize {
-                print!("seq_{}  ", idx + 1);
+                println!("seq_{}  {}", idx, seq);
             } else {
-                let cons_id = if self.n_cons > 1 {
-                    format!("_{}", idx - self.n_seq as usize + 1)
-                } else {
-                    "".to_string()
-                };
-                print!("consensus{}", cons_id);
+                println!("cns_{}  {}", idx - self.n_seq as usize, seq);
             }
-            println!("{}", seq);
         });
     }
 }
