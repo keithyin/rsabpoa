@@ -193,8 +193,8 @@ fn consensus_worker(
     let mut instant = Instant::now();
     let mut abpt = abpoa_param.to_abpoa_para_t();
     let abpt: *mut abpoa_para_t = &mut abpt as *mut abpoa_para_t;
-    let ab = unsafe { abpoa_init() };
-
+    
+    // let ab = unsafe { abpoa_init() };
     for channel_subreads in recv {
         if instant.elapsed().as_secs() > 60 && idx == 0 {
             println!(
@@ -205,7 +205,7 @@ fn consensus_worker(
         }
         let mut _timer = scoped_timer.perform_timing();
 
-        let cns_res = consensus_core(Some(ab), abpt, channel_subreads);
+        let cns_res = consensus_core(None, abpt, channel_subreads);
         _timer.done_with_cnt(1);
         if let Some(consensus_res) = cns_res {
             match send.send(consensus_res) {
