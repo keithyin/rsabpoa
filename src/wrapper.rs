@@ -1,9 +1,9 @@
 use std::marker::PhantomData;
 
-use crate::abpoa_sys::{
+use crate::{abpoa::AlignMode, abpoa_sys::{
     abpoa_free, abpoa_free_para, abpoa_init, abpoa_init_para, abpoa_para_t, abpoa_post_set_para,
     abpoa_t,
-};
+}};
 
 /// !Copy, !Clone, !Send, !Sync
 /// let mut ap = AbpoaParam::new();
@@ -46,12 +46,16 @@ impl AbpoaParam {
             abpt.set_out_cons(1);
             // abpt.set_ret_cigar(1);
             abpt.set_amb_strand(1); // adaptive strand
+            // abpt.align_mode = AlignMode::LOCAL as i32;
             abpt.match_ = 2;
             abpt.mismatch = 5;
             abpt.gap_open1 = 2;
             abpt.gap_open2 = 24;
             abpt.gap_ext1 = 1;
             abpt.gap_ext2 = 0;
+            // abpt.set_disable_seeding(0);
+            // abpt.k = 7;
+            // abpt.w = 5;
         }
     }
 }
