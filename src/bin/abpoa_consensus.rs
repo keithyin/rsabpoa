@@ -30,6 +30,9 @@ pub struct Cli {
 
     #[arg(short = 'n')]
     first_n_channels: Option<usize>,
+
+    #[arg(long = "minPasses", default_value_t = 3)]
+    min_passes: usize,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -53,6 +56,21 @@ impl Subread {
 
 #[derive(Debug, Clone, Default)]
 pub struct ChannelSubreads(pub Vec<Subread>);
+
+impl ChannelSubreads {
+    pub fn get_best_sbr(&self) -> Option<&str> {
+        self.iter()
+            .max_by_key(|sbr| {
+                let base = if sbr.cx == 3 { 1 } else { 0 };
+                base * 10_000_000 + sbr.seq.len()
+            })
+            .map(|v| v.seq.as_str())
+    }
+    pub fn num_passes(&self) -> usize {
+        self.iter().filter(|sbr| sbr.cx == 3).count()
+    }
+}
+
 impl Deref for ChannelSubreads {
     type Target = Vec<Subread>;
     fn deref(&self) -> &Self::Target {
@@ -150,7 +168,11 @@ impl<'a> Iterator for ChannelSbrIter<'a> {
     }
 }
 
-fn bam_reader_worker(bam_file: &str, sender: Sender<ChannelSubreads>, first_n_channels: Option<usize>) {
+fn bam_reader_worker(
+    bam_file: &str,
+    sender: Sender<ChannelSubreads>,
+    first_n_channels: Option<usize>,
+) {
     let mut reader = Reader::from_path(bam_file).unwrap();
     reader.set_threads(2).unwrap();
 
@@ -187,13 +209,14 @@ fn consensus_worker(
     abpoa_param: &AbpoaParam,
     recv: Receiver<ChannelSubreads>,
     send: Sender<ConsensusResult>,
+    cli: &Cli,
     idx: usize,
 ) {
     let mut scoped_timer = ScopedTimer::new();
     let mut instant = Instant::now();
     let mut abpt = abpoa_param.to_abpoa_para_t();
     let abpt: *mut abpoa_para_t = &mut abpt as *mut abpoa_para_t;
-    
+
     // let ab = unsafe { abpoa_init() };
     for channel_subreads in recv {
         if instant.elapsed().as_secs() > 60 && idx == 0 {
@@ -205,7 +228,7 @@ fn consensus_worker(
         }
         let mut _timer = scoped_timer.perform_timing();
 
-        let cns_res = consensus_core(None, abpt, channel_subreads);
+        let cns_res = consensus_core(None, abpt, cli, channel_subreads);
         _timer.done_with_cnt(1);
         if let Some(consensus_res) = cns_res {
             match send.send(consensus_res) {
@@ -222,39 +245,48 @@ fn consensus_worker(
 fn consensus_core(
     ab: Option<*mut abpoa_t>,
     abpt: *mut abpoa_para_t,
+    cli: &Cli,
     mut channel_subreads: ChannelSubreads,
 ) -> Option<ConsensusResult> {
     channel_subreads = filter_and_sort_subreads(channel_subreads);
-    let mut seqs = channel_subreads
-        .iter_mut()
-        .map(|sbr| unsafe { sbr.seq.as_bytes_mut() })
-        .collect::<Vec<_>>();
-    let clean_up_ab = ab.is_none();
-    let ab = if let Some(ab_) = ab {
-        ab_
+    let num_passes = channel_subreads.num_passes();
+
+    let consensus_seq = if num_passes >= cli.min_passes {
+        let mut seqs = channel_subreads
+            .iter_mut()
+            .map(|sbr| unsafe { sbr.seq.as_bytes_mut() })
+            .collect::<Vec<_>>();
+        let clean_up_ab = ab.is_none();
+        let ab = if let Some(ab_) = ab {
+            ab_
+        } else {
+            unsafe { abpoa_init() }
+        };
+
+        let msa_result = abpoa_consensus_dna_core(ab, abpt, &mut seqs);
+        if clean_up_ab {
+            unsafe {
+                abpoa_free(ab);
+            }
+        }
+
+        if msa_result.is_none() {
+            return None;
+        }
+        let consensus_seq = msa_result.as_ref().unwrap().max_num_of_seq_consensus_seq();
+        if consensus_seq.is_none() {
+            return None;
+        }
+        consensus_seq.unwrap().to_string()
     } else {
-        unsafe { abpoa_init() }
+        if let Some(seq) = channel_subreads.get_best_sbr() {
+            seq.to_string()
+        } else {
+            return None;
+        }
     };
 
-    let msa_result = abpoa_consensus_dna_core(ab, abpt, &mut seqs);
-    if clean_up_ab {
-        unsafe {
-            abpoa_free(ab);
-        }
-    }
-
-    if msa_result.is_none() {
-        return None;
-    }
-    let consensus_seq = msa_result.as_ref().unwrap().max_num_of_seq_consensus_seq();
-    if consensus_seq.is_none() {
-        return None;
-    }
-
-    let consensus_res = ConsensusResult::new(
-        channel_subreads[0].channel,
-        consensus_seq.unwrap().to_string(),
-    );
+    let consensus_res = ConsensusResult::new(channel_subreads[0].channel, consensus_seq);
     return Some(consensus_res);
 }
 
@@ -376,8 +408,7 @@ fn single_thread(cli: &Cli, oup_bam: &str) {
     // let ab = unsafe { abpoa_init() };
 
     for channel_sbr in channel_sbr_iter {
-
-        if let Some(v) = consensus_core(None, &mut abpt, channel_sbr) {
+        if let Some(v) = consensus_core(None, &mut abpt, cli, channel_sbr) {
             let _ = consensus_writer_core(&mut writer, v);
         }
         pbar.inc(1);
@@ -421,6 +452,7 @@ fn multi_threads(cli: &Cli, oup_bam: &str) {
                     &align_param,
                     reader_recv_,
                     consensus_result_sender_,
+                    cli,
                     thread_idx,
                 );
             });
