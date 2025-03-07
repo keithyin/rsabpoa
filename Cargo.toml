@@ -5,7 +5,7 @@ edition = "2021"
 description = "abpoa rust binding"
 license = "MIT"
 repository ="https://github.com/keithyin/rsabpoa"
-exclude = ["abPOA-v1.5.3/test_data", "abPOA-v1.5.3/"]
+exclude = ["abPOA-v1.5.3/test_data", "abPOA-v1.5.3/python"]
 
 [dependencies]
 lazy_static = "1.5"
