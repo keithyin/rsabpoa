@@ -1,6 +1,6 @@
 [package]
 name = "rsabpoa"
-version = "0.2.1"
+version = "0.3.0"
 edition = "2021"
 description = "abpoa rust binding"
 license = "MIT"
@@ -14,5 +14,10 @@ crossbeam = "0.8"
 clap = {version="4.4", features=["derive"]}
 num_cpus="1.16"
 
+[[bin]]
+name = "abpoa_consensus"
+path = "src/bin/abpoa_consensus.rs"
+
 [profile.release]
 debug = true
+
