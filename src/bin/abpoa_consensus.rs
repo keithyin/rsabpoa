@@ -27,6 +27,9 @@ pub struct Cli {
 
     #[arg(short = 'i')]
     pub sbr_bam: String,
+
+    #[arg(short = 'n')]
+    first_n_channels: Option<usize>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -85,13 +88,17 @@ impl ConsensusResult {
 pub struct ChannelSbrIter<'a> {
     records: Records<'a, bam::Reader>,
     channel_subreads: Option<ChannelSubreads>,
+    first_n_channels: usize,
+    out_channels: usize,
 }
 
 impl<'a> ChannelSbrIter<'a> {
-    pub fn new(records: Records<'a, bam::Reader>) -> Self {
+    pub fn new(records: Records<'a, bam::Reader>, first_n_channels: Option<usize>) -> Self {
         Self {
             records,
             channel_subreads: Some(ChannelSubreads::default()),
+            first_n_channels: first_n_channels.unwrap_or(usize::MAX),
+            out_channels: 0,
         }
     }
 }
@@ -99,6 +106,10 @@ impl<'a> ChannelSbrIter<'a> {
 impl<'a> Iterator for ChannelSbrIter<'a> {
     type Item = ChannelSubreads;
     fn next(&mut self) -> Option<Self::Item> {
+        if self.out_channels >= self.first_n_channels {
+            return None;
+        }
+
         let res = loop {
             let record = self.records.next();
             if record.is_none() {
@@ -134,16 +145,14 @@ impl<'a> Iterator for ChannelSbrIter<'a> {
             .map(|sbr| sbr.channel)
             .collect::<HashSet<_>>();
         assert!(distinct_channels.len() <= 1);
+        self.out_channels += 1;
         return res;
     }
 }
 
-fn bam_reader_worker(bam_file: &str, sender: Sender<ChannelSubreads>) {
+fn bam_reader_worker(bam_file: &str, sender: Sender<ChannelSubreads>, first_n_channels: Option<usize>) {
     let mut reader = Reader::from_path(bam_file).unwrap();
     reader.set_threads(2).unwrap();
-
-    let mut pre_channel = None;
-    let mut channel_subreads = ChannelSubreads::default();
 
     let mut scoped_timer = ScopedTimer::new();
 
@@ -151,8 +160,12 @@ fn bam_reader_worker(bam_file: &str, sender: Sender<ChannelSubreads>) {
 
     let mut instant = Instant::now();
     // let records = reader.records();
+    let channel_subreads_iter = ChannelSbrIter::new(reader.records(), first_n_channels);
 
-    for record in reader.records() {
+    for channel_subreads in channel_subreads_iter {
+        _timer.done_with_cnt(1);
+        _timer = scoped_timer.perform_timing();
+
         if instant.elapsed().as_secs() > 60 {
             println!(
                 "bam_reader_speed:{:.4}iter/sec",
@@ -160,38 +173,11 @@ fn bam_reader_worker(bam_file: &str, sender: Sender<ChannelSubreads>) {
             );
             instant = Instant::now();
         }
-        let record = record.unwrap();
-        let record_ext = BamRecordExt::new(&record);
-        let seq = record_ext.get_seq();
-        let name = record_ext.get_qname();
-        let cx = record_ext.get_cx().unwrap();
-        let channel_idx = record_ext.get_ch().unwrap();
-
-        if pre_channel.is_some() && *pre_channel.as_ref().unwrap() != channel_idx {
-            _timer.done_with_cnt(1);
-
-            match sender.send(channel_subreads) {
-                Ok(_) => {}
-                Err(err) => {
-                    eprintln!("{}", err);
-                    return;
-                }
-            }
-
-            _timer = scoped_timer.perform_timing();
-            channel_subreads = ChannelSubreads::default();
-        }
-
-        let subread = Subread::new(seq, name, channel_idx, cx);
-        channel_subreads.push(subread);
-        pre_channel = Some(channel_idx);
-    }
-
-    if channel_subreads.len() > 0 {
         match sender.send(channel_subreads) {
             Ok(_) => {}
             Err(err) => {
                 eprintln!("{}", err);
+                return;
             }
         }
     }
@@ -299,18 +285,12 @@ fn consensus_writer(recv: Receiver<ConsensusResult>, fname: &str) {
         }
 
         let _timer = scoped_timer.perform_timing();
-        let mut record = Record::new();
-        record.set_qname(format!("channel_{}", consensus_res.channel_id).as_bytes());
-        record.set(
-            format!("channel/{}/poa", consensus_res.channel_id).as_bytes(),
-            None,
-            consensus_res.consensus_str.as_bytes(),
-            &vec![255; consensus_res.consensus_str.len()],
-        );
+
+        let write_res = consensus_writer_core(&mut writer, consensus_res);
 
         pbar.inc(1);
 
-        if let Err(e) = writer.write(&record) {
+        if let Err(e) = write_res {
             eprintln!("Error writing to BAM file: {}", e);
             break;
         }
@@ -318,6 +298,22 @@ fn consensus_writer(recv: Receiver<ConsensusResult>, fname: &str) {
         _timer.done_with_cnt(1);
     }
     pbar.finish();
+}
+
+fn consensus_writer_core(
+    bam_writer: &mut Writer,
+    consensus_res: ConsensusResult,
+) -> anyhow::Result<()> {
+    let mut record = Record::new();
+    record.set_qname(format!("channel_{}", consensus_res.channel_id).as_bytes());
+    record.set(
+        format!("channel/{}/poa", consensus_res.channel_id).as_bytes(),
+        None,
+        consensus_res.consensus_str.as_bytes(),
+        &vec![255; consensus_res.consensus_str.len()],
+    );
+    let _ = bam_writer.write(&record)?;
+    Ok(())
 }
 
 fn filter_and_sort_subreads(channel_subreads: ChannelSubreads) -> ChannelSubreads {
@@ -354,29 +350,84 @@ fn filter_and_sort_subreads(channel_subreads: ChannelSubreads) -> ChannelSubread
     filtered_subreads.into()
 }
 
-fn single_thread(bam_file: &str) {
-    let mut reader = Reader::from_path(bam_file).unwrap();
+fn single_thread(cli: &Cli, oup_bam: &str) {
+    let inp_bam = &cli.sbr_bam;
+    let mut reader = Reader::from_path(inp_bam).unwrap();
     reader.set_threads(2).unwrap();
-    let channel_sbr_iter = ChannelSbrIter::new(reader.records());
+
+    let mut header = Header::new();
+    let mut hd = HeaderRecord::new(b"HD");
+    hd.push_tag(b"VN", "1.5");
+    hd.push_tag(b"SO", "unknown");
+
+    header.push_record(&hd);
+
+    // 创建 BAM 写入器
+    let mut writer =
+        Writer::from_path(oup_bam, &header, bam::Format::Bam).expect("Failed to create BAM writer");
+
+    writer.set_threads(2).unwrap();
+
+    let channel_sbr_iter = ChannelSbrIter::new(reader.records(), cli.first_n_channels);
 
     let param = AbpoaParam::channel_draft_param();
     let mut abpt = param.to_abpoa_para_t();
-    let mut succ = 0;
-    let mut fail = 0;
     let pbar = get_spin_pb("processing...".to_string(), DEFAULT_INTERVAL);
-    let ab = unsafe { abpoa_init() };
+    // let ab = unsafe { abpoa_init() };
 
     for channel_sbr in channel_sbr_iter {
+
         if let Some(v) = consensus_core(None, &mut abpt, channel_sbr) {
-            succ += 1;
-        } else {
-            fail += 1;
+            let _ = consensus_writer_core(&mut writer, v);
         }
         pbar.inc(1);
     }
     pbar.finish();
-    println!("succ:{succ}, fail:{fail}");
+}
 
+fn multi_threads(cli: &Cli, oup_bam: &str) {
+    let inp_bam = &cli.sbr_bam;
+
+    let threads = cli.threads.unwrap_or(num_cpus::get_physical() / 2);
+    thread::scope(|thread_scope| {
+        let (reader_sender, reader_recv) = crossbeam::channel::bounded(1000);
+        thread_scope.spawn(move || {
+            bam_reader_worker(&inp_bam, reader_sender, cli.first_n_channels);
+        });
+
+        // let mut cnt = 0;
+        // let instant = Instant::now();
+        // for v in reader_recv {
+        //     cnt += 1;
+        // }
+        // println!("cnt:{cnt}, {}", instant.elapsed().as_secs());
+
+        let (consensus_result_sender, consensus_result_recv) = crossbeam::channel::bounded(1000);
+        for thread_idx in 0..threads {
+            let reader_recv_ = reader_recv.clone();
+            let consensus_result_sender_ = consensus_result_sender.clone();
+            thread_scope.spawn(move || {
+                let mut align_param = AbpoaParam::default();
+                align_param.match_score = 2;
+                align_param.mismatch_score = 5;
+                align_param.gap_open1 = 2;
+                align_param.gap_open2 = 24;
+                align_param.gap_ext1 = 1;
+                align_param.gap_ext2 = 0;
+                align_param.out_msa = false;
+                align_param.out_consensus = true;
+                align_param.set_align_mode(rsabpoa::abpoa::AlignMode::LOCAL);
+                consensus_worker(
+                    &align_param,
+                    reader_recv_,
+                    consensus_result_sender_,
+                    thread_idx,
+                );
+            });
+        }
+
+        consensus_writer(consensus_result_recv, oup_bam);
+    });
 }
 
 fn main() {
@@ -385,49 +436,15 @@ fn main() {
     let oup_bam = format!("{}.poa.bam", inp_bam.rsplit_once(".").unwrap().0);
     let oup_bam = &oup_bam;
 
-    single_thread(inp_bam);
-
-    // let threads = cli.threads.unwrap_or(num_cpus::get_physical() / 2);
-    // let threads = 1;
-    // thread::scope(|thread_scope| {
-    //     let (reader_sender, reader_recv) = crossbeam::channel::bounded(1000);
-    //     thread_scope.spawn(move || {
-    //         bam_reader_worker(&inp_bam, reader_sender);
-    //     });
-
-    //     // let mut cnt = 0;
-    //     // let instant = Instant::now();
-    //     // for v in reader_recv {
-    //     //     cnt += 1;
-    //     // }
-    //     // println!("cnt:{cnt}, {}", instant.elapsed().as_secs());
-
-    //     let (consensus_result_sender, consensus_result_recv) = crossbeam::channel::bounded(1000);
-    //     for thread_idx in 0..threads {
-    //         let reader_recv_ = reader_recv.clone();
-    //         let consensus_result_sender_ = consensus_result_sender.clone();
-    //         thread_scope.spawn(move || {
-    //             let mut align_param = AbpoaParam::default();
-    //             align_param.match_score = 2;
-    //             align_param.mismatch_score = 5;
-    //             align_param.gap_open1 = 2;
-    //             align_param.gap_open2 = 24;
-    //             align_param.gap_ext1 = 1;
-    //             align_param.gap_ext2 = 0;
-    //             align_param.out_msa = false;
-    //             align_param.out_consensus = true;
-    //             align_param.set_align_mode(rsabpoa::abpoa::AlignMode::LOCAL);
-    //             consensus_worker(
-    //                 &align_param,
-    //                 reader_recv_,
-    //                 consensus_result_sender_,
-    //                 thread_idx,
-    //             );
-    //         });
-    //     }
-
-    //     consensus_writer(consensus_result_recv, oup_bam);
-    // });
+    if let Some(num_t) = cli.threads {
+        if num_t == 1 {
+            single_thread(&cli, oup_bam);
+        } else {
+            multi_threads(&cli, oup_bam);
+        }
+    } else {
+        multi_threads(&cli, oup_bam);
+    }
 }
 
 #[cfg(test)]
