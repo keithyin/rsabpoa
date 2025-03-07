@@ -457,6 +457,8 @@ fn multi_threads(cli: &Cli, oup_bam: &str) {
                 );
             });
         }
+        drop(reader_recv);
+        drop(consensus_result_sender);
 
         consensus_writer(consensus_result_recv, oup_bam);
     });
